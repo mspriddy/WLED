@@ -70,6 +70,7 @@ class PocketwatchClockUsermod : public Usermod {
     }
     void loop() override {}
     uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
+
 };
 
 static PocketwatchClockUsermod pocketwatch_clock;

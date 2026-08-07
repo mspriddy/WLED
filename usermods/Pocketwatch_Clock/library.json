@@ -1,0 +1,7 @@
+{
+  "name": "Pocketwatch_Clock",
+  "version": "1.0.0",
+  "build": {
+    "srcDir": "."
+  }
+}

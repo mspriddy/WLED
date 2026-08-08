@@ -1,20 +1,37 @@
 #include "wled.h"
 
 /*
- * Pocketwatch Clock - a real WLED EFFECT (not an overlay)
- * ---------------------------------------------------------
- * After installing this, "Pocketwatch Clock" shows up in your normal
- * WLED effects list, right alongside Rainbow, Chase, etc. Select it like
- * any other effect, and it uses WLED's normal controls:
+ * Pocketwatch Clock - a real WLED EFFECT, plus a physical button that
+ * temporarily shows the clock over a running playlist.
+ * ---------------------------------------------------------------------
+ * THE EFFECT
+ * "Pocketwatch Clock" shows up in your normal WLED effects list, right
+ * alongside Rainbow, Chase, etc. Select it like any other effect:
  *   - Color 1 (the regular color wheel) = the hour-hand color
  *   - Intensity slider                  = max brightness of the center glow
  *   - "Breathe" checkbox                = pulse the center pixel once/sec
  *
  * Assumes a 7-pixel NeoPixel Jewel wired center-out:
- *   pixel 0        = center
- *   pixels 1-6     = outer ring
- * If your jewel's pixel 0 isn't the physical center LED, change the two
- * constants below (see readme.md for how to test this).
+ *   pixel 0    = center
+ *   pixels 1-6 = outer ring
+ *
+ * THE BUTTON
+ * Wire a momentary push button between a spare GPIO pin and GND. On a
+ * press, this usermod:
+ *   1. Applies the "Clock" preset (your Pocketwatch Clock effect)
+ *   2. Waits the configured duration (default 10s)
+ *   3. Applies the "Playlist" preset again, which resumes cycling
+ *
+ * SETUP (all done in the WLED web UI, no recompiling):
+ *   1. Set up your rotating look as a WLED Playlist, save it as a preset,
+ *      note its preset number.
+ *   2. Select the "Pocketwatch Clock" effect, dial in your color/
+ *      brightness, save THAT as a separate preset, note its number.
+ *   3. Go to Config -> Usermods -> "Pocketwatch Clock" and fill in:
+ *        Button Pin           = the GPIO you wired the button to
+ *        Playlist Preset ID   = the preset number from step 1
+ *        Clock Preset ID      = the preset number from step 2
+ *        Clock Duration (ms)  = how long to show the clock (10000 = 10s)
  */
 
 static constexpr int JEWEL_CENTER_INDEX = 0;  // center pixel
@@ -64,13 +81,75 @@ static void mode_pocketwatch_clock(void) {
 static const char _data_FX_MODE_POCKETWATCH_CLOCK[] PROGMEM = "Pocketwatch Clock@,Center Brightness,,,,Breathe;Hour;;;o1=1,ix=160";
 
 class PocketwatchClockUsermod : public Usermod {
+  private:
+    // ---- configurable via Config -> Usermods, no recompiling needed ----
+    int8_t   buttonPin         = 3;      // GPIO the button is wired to (Xiao D1 by default)
+    uint8_t  playlistPresetID  = 1;      // preset # of your rotating playlist
+    uint8_t  clockPresetID     = 2;      // preset # of the Pocketwatch Clock look
+    uint32_t clockShowMillis   = 10000;  // how long to show the clock, in ms
+
+    // ---- runtime state ----
+    bool     initDone           = false;
+    bool     stableButtonState  = HIGH;  // HIGH = not pressed (pull-up, active low)
+    bool     lastRawReading     = HIGH;
+    uint32_t lastDebounceTime   = 0;
+    static constexpr uint32_t debounceDelay = 50;
+
+    bool     clockActive        = false;
+    uint32_t clockActiveUntil   = 0;
+
   public:
     void setup() override {
+      if (buttonPin >= 0) pinMode(buttonPin, INPUT_PULLUP);
       strip.addEffect(255, &mode_pocketwatch_clock, _data_FX_MODE_POCKETWATCH_CLOCK);
+      initDone = true;
     }
-    void loop() override {}
-    uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
 
+    void loop() override {
+      if (!initDone || buttonPin < 0) return;
+
+      // --- debounce the button ---
+      bool reading = digitalRead(buttonPin);
+      if (reading != lastRawReading) lastDebounceTime = millis();
+      lastRawReading = reading;
+
+      if (millis() - lastDebounceTime > debounceDelay && reading != stableButtonState) {
+        stableButtonState = reading;
+        if (stableButtonState == LOW) { // confirmed press
+          applyPreset(clockPresetID);
+          clockActive = true;
+          clockActiveUntil = millis() + clockShowMillis;
+        }
+      }
+
+      // --- auto-return to the playlist after the clock's had its time ---
+      if (clockActive && millis() > clockActiveUntil) {
+        clockActive = false;
+        applyPreset(playlistPresetID);
+      }
+    }
+
+    void addToConfig(JsonObject& root) override {
+      JsonObject top = root.createNestedObject(F("Pocketwatch Clock"));
+      top[F("Button Pin (-1 = no button)")] = buttonPin;
+      top[F("Playlist Preset ID")]          = playlistPresetID;
+      top[F("Clock Preset ID")]             = clockPresetID;
+      top[F("Clock Duration (ms)")]         = clockShowMillis;
+    }
+
+    bool readFromConfig(JsonObject& root) override {
+      JsonObject top = root[F("Pocketwatch Clock")];
+      bool configComplete = !top.isNull();
+      configComplete &= getJsonValue(top[F("Button Pin (-1 = no button)")], buttonPin, 3);
+      configComplete &= getJsonValue(top[F("Playlist Preset ID")], playlistPresetID, 1);
+      configComplete &= getJsonValue(top[F("Clock Preset ID")], clockPresetID, 2);
+      configComplete &= getJsonValue(top[F("Clock Duration (ms)")], clockShowMillis, 10000);
+      return configComplete;
+    }
+
+    uint16_t getId() override {
+      return USERMOD_ID_UNSPECIFIED;
+    }
 };
 
 static PocketwatchClockUsermod pocketwatch_clock;
